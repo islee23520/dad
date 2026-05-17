@@ -25,9 +25,11 @@ CODE_STANDARDS="$ROOT/bin/code-standards-check.py"
 DOCTOR="$ROOT/bin/dad-doctor.py"
 PACKAGE="$ROOT/bin/dad-package.sh"
 STARTUP_PLAN="$ROOT/bin/dad-startup-plan.py"
+HOOK_MANAGER="$ROOT/bin/dad-hooks.sh"
 POLICY_VERSION="$(tr -d '[:space:]' < "$ROOT/POLICY_VERSION")"
 PLUGIN_MANIFEST="$REPO_ROOT/.claude-plugin/plugin.json"
-PLUGIN_HOOKS="$REPO_ROOT/hooks/hooks.json"
+PLUGIN_HOOKS="$REPO_ROOT/hooks/dad-events.json"
+AUTOLOAD_PLUGIN_HOOKS="$REPO_ROOT/hooks/hooks.json"
 PLUGIN_HOOK_SCRIPT="$REPO_ROOT/hooks/scripts/dad-event-hook.sh"
 
 fail() {
@@ -75,9 +77,14 @@ assert manifest["version"]
 assert "hooks" in hooks and isinstance(hooks["hooks"], dict)
 PY
 grep -q 'user_invocable: true' "$SKILL_FILE" || fail "DAD skill must be slash-invocable when installed as a plugin"
-grep -q 'CLAUDE_PLUGIN_ROOT' "$PLUGIN_HOOKS" || fail "plugin hooks must resolve through CLAUDE_PLUGIN_ROOT"
+[[ ! -e "$AUTOLOAD_PLUGIN_HOOKS" ]] || fail "DAD plugin must not ship auto-loaded hooks/hooks.json"
+grep -q 'scripts/dad-event-hook.sh' "$PLUGIN_HOOKS" || fail "runtime hook definition must use a relative hook wrapper path"
 grep -q 'CLAUDE_PLUGIN_ROOT' "$PLUGIN_HOOK_SCRIPT" || fail "plugin hook wrapper must self-locate from CLAUDE_PLUGIN_ROOT"
 grep -q 'GROK_PLUGIN_ROOT' "$PLUGIN_HOOK_SCRIPT" || fail "plugin hook wrapper must honor GROK_PLUGIN_ROOT"
+grep -q 'dad-hooks.sh install' "$SKILL_FILE" || fail "DAD skill must activate hooks at startup"
+grep -q 'dad-hooks.sh remove' "$SKILL_FILE" || fail "DAD skill must remove hooks during stop"
+grep -q 'dad-hooks.sh install' "$DESIGN_FILE" || fail "DAD design must document runtime hook activation"
+grep -q 'hooks/dad-events.json' "$REPO_ROOT/README.md" || fail "README must document runtime hook definition"
 grep -q 'GROK_PLUGIN_DATA' "$ROOT/bin/dad-env.sh" || fail "DAD shell path helper must honor GROK_PLUGIN_DATA"
 grep -q 'GROK_PLUGIN_DATA' "$ROOT/bin/dad_paths.py" || fail "DAD Python path helper must honor GROK_PLUGIN_DATA"
 grep -q 'GROK_PLUGIN_DATA' "$SKILL_FILE" || fail "DAD skill must document Grok plugin data root precedence"
@@ -85,7 +92,7 @@ grep -q 'GROK_PLUGIN_DATA' "$DESIGN_FILE" || fail "DAD design must document Grok
 grep -q 'GROK_PLUGIN_DATA' "$REPO_ROOT/README.md" || fail "README must document Grok plugin data root precedence"
 legacy_hook_template="$REPO_ROOT/hooks/dad-events"".json.template"
 mcp_config_path="$REPO_ROOT/.mcp"".json"
-[[ ! -e "$legacy_hook_template" ]] || fail "plugin hook config must live at hooks/hooks.json, not a template path"
+[[ ! -e "$legacy_hook_template" ]] || fail "runtime hook config must live at hooks/dad-events.json, not a template path"
 [[ ! -e "$mcp_config_path" ]] || fail "portable DAD plugin must ship native tmux only"
 grep -q 'Linux with procfs' "$REPO_ROOT/README.md" || fail "README must document Linux/procfs platform requirement"
 grep -q 'dad-doctor.py' "$REPO_ROOT/README.md" || fail "README must document DAD doctor preflight"
@@ -151,7 +158,7 @@ printf 'log\n' > "$package_root/dad/logs/dad.log"
 printf 'lock\n' > "$package_root/dad/locks/x.lock"
 printf 'pyc\n' > "$package_root/dad/bin/__pycache__/x.pyc"
 printf 'script\n' > "$package_root/dad/bin/keep.sh"
-printf '{}\n' > "$package_root/hooks/hooks.json"
+printf '{}\n' > "$package_root/hooks/dad-events.json"
 printf 'hook\n' > "$package_root/hooks/scripts/keep.sh"
 printf 'skill\n' > "$package_root/skills/dad/SKILL.md"
 package_out="$tmp/dad-package.tar.gz"
@@ -159,6 +166,7 @@ package_out="$tmp/dad-package.tar.gz"
 tar -tzf "$package_out" > "$tmp/dad-package.lst"
 grep -q '^LICENSE$' "$tmp/dad-package.lst" || fail "package export omitted LICENSE"
 grep -q 'dad/bin/keep.sh' "$tmp/dad-package.lst" || fail "package export omitted source files"
+grep -q 'hooks/dad-events.json' "$tmp/dad-package.lst" || fail "package export omitted runtime hook definition"
 ! grep -Eq 'dad/(evidence|events|logs|locks)/|__pycache__|\\.pyc' "$tmp/dad-package.lst" || fail "package export included runtime or generated state"
 
 out="$(DAD_IDLE_CONTROLLER_TEST_DECIDE=1 \
@@ -1532,6 +1540,34 @@ printf '{"hookEventName":"UserPromptSubmit","sessionId":"non-dad","prompt":"hell
 [[ ! -f "$hook_root/unscoped-events.jsonl" ]] || fail "DAD event hook must not store unscoped non-DAD events by default"
 printf '{"hookEventName":"UserPromptSubmit","sessionId":"non-dad","prompt":"hello"}' | DAD_EVENT_STORE_UNSCOPED=1 "$ROOT/bin/dad-event-hook.py" --event-root "$hook_root"
 [[ -f "$hook_root/unscoped-events.jsonl" ]] || fail "DAD event hook must support explicit unscoped debug capture"
+python3 - "$EVENT_HOOK" <<'PY'
+import importlib.util
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+sys.path.insert(0, str(path.parent))
+spec = importlib.util.spec_from_file_location("dad_event_hook", path)
+mod = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(mod)
+assert mod.should_record_context({"dad_state": "working", "dad_window_id": "@1", "window_name": "DAD-X"})
+assert mod.should_record_context({"dad_state": "paused", "dad_window_id": "@1", "window_name": "DAD-X"})
+assert not mod.should_record_context({"dad_state": "stopped", "dad_window_id": "@1", "window_name": "DAD-X"})
+assert mod.should_record_context({"dad_state": "", "dad_window_id": "@1", "window_name": "DAD-X"})
+assert not mod.should_record_context({"dad_state": "", "dad_window_id": "", "window_name": "normal"})
+PY
+
+hook_manager_home="$tmp/grok-home"
+GROK_HOME="$hook_manager_home" "$HOOK_MANAGER" install >"$tmp/dad-hooks-install.out"
+[[ -f "$hook_manager_home/hooks/dad-events.json" ]] || fail "dad-hooks install must create runtime hook file"
+grep -q "$REPO_ROOT/hooks/scripts/dad-event-hook.sh" "$hook_manager_home/hooks/dad-events.json" || fail "dad-hooks install must materialize an absolute hook command"
+grep -q 'DAD_HOOKS_INSTALLED' "$tmp/dad-hooks-install.out" || fail "dad-hooks install output missing installed marker"
+GROK_HOME="$hook_manager_home" "$HOOK_MANAGER" status >"$tmp/dad-hooks-status.out"
+grep -q 'DAD_HOOKS_TARGET_PRESENT: yes' "$tmp/dad-hooks-status.out" || fail "dad-hooks status did not see runtime hook"
+GROK_HOME="$hook_manager_home" "$HOOK_MANAGER" remove >"$tmp/dad-hooks-remove.out"
+[[ ! -e "$hook_manager_home/hooks/dad-events.json" ]] || fail "dad-hooks remove must delete runtime hook when no DAD windows are active"
+grep -q 'DAD_HOOKS_REMOVED' "$tmp/dad-hooks-remove.out" || fail "dad-hooks remove output missing removed marker"
 
 plugin_evidence_event_root="$tmp/plugin-evidence-events"
 plugin_evidence_json="$grok_plugin_data/evidence/20260516/plugin-record.json"

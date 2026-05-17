@@ -89,7 +89,7 @@ Current scheduler policy version is stored in `<DAD_ROOT>/POLICY_VERSION`. Gener
 11. Dad enforces an evidence contract before accepting any checkpoint. The Son's prose is treated as a claim queue, not proof.
 12. When upgrading from an older policy, Dad must not carry a previous verifier `PASS` forward as acceptance unless objective-relevant evidence-contract metadata is already present.
 13. Dad obtains risky runtime observations through a bounded evidence runner or Son-produced runner logs, not by entering the artifact in Dad's own pane.
-14. Dad uses structured hook event traces as the durable trajectory layer for tool calls, failures, compactions, stops, and evidence-runner references.
+14. Dad enables structured hook event traces at startup with `<DAD_ROOT>/bin/dad-hooks.sh install --socket <socket>` and uses those traces as the durable trajectory layer for tool calls, failures, compactions, stops, and evidence-runner references.
 
 Dad owns the supervision loops completely. Delegation to the user is never the default.
 
@@ -103,7 +103,7 @@ A scheduled fast/deep/strategic run is not a scheduler repair turn. It must not 
 
 Startup, replacement, rehydration, and scheduler-label repair must create exactly three DAD scheduler tasks with `recurring: true` and `durable: false`. If durable DAD scheduler tasks are observed, delete and recreate only this window's owned fast/deep/strategic tasks as non-durable tasks.
 
-When stopping or cleaning up DAD, delete the owned scheduler IDs first, set `@dad_state=stopped`, terminate DAD-owned daemon PIDs, and run `<DAD_ROOT>/bin/dad-cleanup-orphans.sh --socket <socket> --window <window-id> --kill-dad-windows` if this DAD window or daemons remain. Global cleanup without an explicit owner is dry-run/confirmed only. Cleanup may close DAD-owned tmux windows and background daemon processes; it must not edit project artifacts.
+When stopping or cleaning up DAD, delete the owned scheduler IDs first, set `@dad_state=stopped`, terminate DAD-owned daemon PIDs, and run `<DAD_ROOT>/bin/dad-cleanup-orphans.sh --socket <socket> --window <window-id> --kill-dad-windows` if this DAD window or daemons remain. Then run `<DAD_ROOT>/bin/dad-hooks.sh remove --socket <socket>`; it removes the runtime hook only when no other DAD window is still live. Global cleanup without an explicit owner is dry-run/confirmed only. Cleanup may close DAD-owned tmux windows and background daemon processes; it must not edit project artifacts.
 
 ### Evidence-Grounded Supervision
 
@@ -140,7 +140,7 @@ Use `--allow-timeout` only for long-lived software when the transcript clearly s
 
 ### Structured Event Trace
 
-DAD records Grok lifecycle/tool events through a passive plugin hook at `<DAD_PLUGIN_ROOT>/hooks/hooks.json`. The hook calls `<DAD_ROOT>/bin/dad-event-hook.py` through a fail-open shell wrapper and writes normalized JSONL under `<DAD_DATA_ROOT>/events/`.
+DAD records Grok lifecycle/tool events through a passive runtime hook. The plugin ships the definition at `<DAD_PLUGIN_ROOT>/hooks/dad-events.json`, not at auto-loaded `hooks/hooks.json`. Startup runs `<DAD_ROOT>/bin/dad-hooks.sh install --socket <socket>` to expose that definition as `${GROK_HOME:-~/.grok}/hooks/dad-events.json` while DAD is active. Stop/cleanup runs `<DAD_ROOT>/bin/dad-hooks.sh remove --socket <socket>` so trusted DAD installs do not keep running hook commands after the last DAD closes. The hook calls `<DAD_ROOT>/bin/dad-event-hook.py` through a fail-open shell wrapper and writes normalized JSONL under `<DAD_DATA_ROOT>/events/`.
 
 This trace is an audit trail, not an automation agent. It never sends input, runs project commands, manages schedulers, compacts memory, edits artifacts, or blocks tool calls. By default it records DAD tmux windows only and stores event names, session/workspace identifiers, tmux pane/window metadata, tool names, status, command kind/path summaries, hashes, failure summaries, evidence-runner references, lifecycle events, and fingerprints. Evidence references are parsed from `EVIDENCE_JSON:`/`EVIDENCE_LOG:` markers and generic `/evidence/` paths so plugin-data evidence roots work. Shell-side event emitters use structured JSON encoding so multiline reasons stay valid JSONL. It does not store full prompts, full tool outputs, or full command previews unless explicitly enabled outside DAD.
 
@@ -152,7 +152,7 @@ Dad summarizes trace evidence with:
 
 When Dad has the tmux socket/window ID, it should scope summaries with `--tmux-window <window-id>` and can refresh tmux metadata with `--tmux-socket <socket> --window-id <window-id>`. The summary includes hook events plus the flat Son watcher and idle-controller JSONL files for that window. The key outputs are `@dad_event_trace_last_summary`, `@dad_event_trace_recent_failures`, `@dad_event_trace_evidence_refs`, and `@dad_event_trace_last_turn_fingerprint`.
 
-Use this trace before trusting Son claims. If hooks were not loaded yet, absence of trace data is neutral; Dad falls back to session logs, artifact inspection, and bounded evidence-runner records.
+Use this trace before trusting Son claims. The hook records live DAD tmux windows only; stopped DAD metadata is no-op. If hooks were not loaded yet, absence of trace data is neutral; Dad falls back to session logs, artifact inspection, and bounded evidence-runner records.
 
 ### Bounded Evidence Runner
 

@@ -152,9 +152,10 @@ flowchart LR
 ```
 
 At startup, `/dad` records the exact tmux socket, window ID, and pane IDs;
-splits the current window; starts the Son in the requested mode; installs
-non-durable Grok scheduler loops; starts watchdog helpers; and begins writing
-event/evidence data under the plugin data root.
+activates the runtime event hook for the active DAD run; splits the current
+window; starts the Son in the requested mode; installs non-durable Grok
+scheduler loops; starts watchdog helpers; and begins writing event/evidence
+data under the plugin data root.
 
 Dad supervises the trajectory. The Son performs the project work.
 
@@ -209,7 +210,7 @@ grok inspect --json | python3 dad/bin/dad-doctor.py --inspect-json -
 ```text
 .claude-plugin/plugin.json       Plugin manifest
 skills/dad/SKILL.md              User-invocable /dad skill
-hooks/hooks.json                 Grok hook registration
+hooks/dad-events.json            Runtime hook definition, activated by /dad
 hooks/scripts/dad-event-hook.sh  Plugin-aware hook wrapper
 dad/DAD.md                       DAD operating design
 dad/POLICY_VERSION               Scheduler policy version
@@ -230,6 +231,10 @@ Runtime data resolves in this order:
 Runtime data includes event traces, evidence output, gate decisions, lease
 files, private daemon logs, and historical window records. These files are
 intentionally ignored by git.
+
+DAD does not ship an auto-loaded `hooks/hooks.json`. The `/dad` startup path
+activates `hooks/dad-events.json` as a runtime hook, and `/dad stop` removes
+that hook after the last live DAD window is gone.
 
 ## Safety Boundaries
 

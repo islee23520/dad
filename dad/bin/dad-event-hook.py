@@ -24,6 +24,7 @@ from dad_paths import events_root
 
 SCHEMA = "dad-event/v1"
 DEFAULT_ROOT = events_root()
+LIVE_DAD_STATES = {"booting", "working", "recovering", "waiting", "verifying", "done", "paused", "broken"}
 SECRET_KEY_RE = re.compile(
     r"(secret|token|password|passwd|authorization|api[_-]?key|private[_-]?key|credential|bearer)",
     re.IGNORECASE,
@@ -310,7 +311,10 @@ def should_record_context(context: dict[str, str]) -> bool:
         return True
     if os.environ.get("DAD_EVENT_FORCE") == "1":
         return True
-    if context.get("dad_state") or context.get("dad_window_id"):
+    dad_state = context.get("dad_state", "").strip()
+    if dad_state:
+        return dad_state in LIVE_DAD_STATES
+    if context.get("dad_window_id"):
         return True
     if context.get("window_name", "").startswith("DAD-"):
         return True

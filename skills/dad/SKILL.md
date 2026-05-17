@@ -337,7 +337,7 @@ Scheduled DAD turns are not scheduler-management turns. During a recurring fast/
 
 DAD scheduler tasks are never durable. Startup, replacement, rehydration, and scheduler-label repair must create fast/deep/strategic tasks with `recurring: true` and `durable: false`. A durable DAD scheduler is a lifecycle bug because it can survive after the user closes the DAD/Grok window. If durable DAD scheduler tasks are observed, delete and recreate them as non-durable tasks for the same window only.
 
-When the user asks to close, stop, or clean up DAD, delete this window's owned scheduler IDs first, set `@dad_state=stopped`, terminate DAD-owned daemon PIDs, and run `<DAD_ROOT>/bin/dad-cleanup-orphans.sh --socket <socket> --window <window-id> --kill-dad-windows` if this DAD window or daemons remain. Global cleanup without an explicit owner is dry-run/confirmed only. This cleanup may close DAD-owned tmux windows and orphan DAD daemons; it must not edit project artifacts.
+When the user asks to close, stop, or clean up DAD, delete this window's owned scheduler IDs first, set `@dad_state=stopped`, terminate DAD-owned daemon PIDs, and run `<DAD_ROOT>/bin/dad-cleanup-orphans.sh --socket <socket> --window <window-id> --kill-dad-windows` if this DAD window or daemons remain. Then run `<DAD_ROOT>/bin/dad-hooks.sh remove --socket <socket>`; it removes the runtime Grok hook only when no other DAD window is still live. Global cleanup without an explicit owner is dry-run/confirmed only. This cleanup may close DAD-owned tmux windows and orphan DAD daemons; it must not edit project artifacts.
 
 ### Mechanical Watchdog
 
@@ -438,7 +438,7 @@ The idle controller treats intentional `SIGTERM`/`SIGINT` as clean lifecycle shu
 
 ### Structured Event Trace Hooks
 
-DAD uses Grok hooks as a passive trajectory recorder, following the research pattern of preserving agent traces for later reflection, verifier audit, and regression analysis. The plugin hook file is `<DAD_PLUGIN_ROOT>/hooks/hooks.json`; it runs `<DAD_PLUGIN_ROOT>/hooks/scripts/dad-event-hook.sh`, which delegates to `<DAD_ROOT>/bin/dad-event-hook.py`.
+DAD uses Grok hooks as a passive trajectory recorder, following the research pattern of preserving agent traces for later reflection, verifier audit, and regression analysis. The plugin ships the hook definition at `<DAD_PLUGIN_ROOT>/hooks/dad-events.json`, not at auto-loaded `hooks/hooks.json`. Fresh startup runs `<DAD_ROOT>/bin/dad-hooks.sh install --socket <socket>` to expose that hook as a runtime user hook while DAD is active. Stop/cleanup runs `<DAD_ROOT>/bin/dad-hooks.sh remove --socket <socket>`, which removes the runtime hook only after the last live DAD window is gone. The hook runs `<DAD_PLUGIN_ROOT>/hooks/scripts/dad-event-hook.sh`, which delegates to `<DAD_ROOT>/bin/dad-event-hook.py`.
 
 This hook layer is observation-only. It must never block a tool call, send tmux input, run project commands, edit artifacts, manage schedulers, compact memory, or spawn agents. It writes normalized JSONL events under `<DAD_DATA_ROOT>/events/`:
 
@@ -447,7 +447,7 @@ This hook layer is observation-only. It must never block a tool call, send tmux 
 - `cwd/<cwd-hash>.jsonl`: per-workspace stream
 - `cwd-index.tsv`: CWD hash lookup
 
-The hook must record DAD tmux windows only unless `DAD_EVENT_CAPTURE_NON_DAD=1` is explicitly set. The default event schema is privacy-conservative: full prompts, full tool outputs, and full shell command previews are not stored. It records event name, session ID, cwd, tmux pane/window metadata, tool name, status, command kind/path summaries, hashes, failure summaries, evidence-runner references, lifecycle events, and a stable event fingerprint. Evidence references are parsed from `EVIDENCE_JSON:`/`EVIDENCE_LOG:` markers and generic `/evidence/` paths so plugin-data evidence roots work. Shell-side event emitters must use structured JSON encoding, not ad hoc quote escaping. Full raw event storage is only allowed when `DAD_EVENT_STORE_RAW=1` is deliberately set outside DAD, and raw storage is still redacted.
+The hook must record live DAD tmux windows only unless `DAD_EVENT_CAPTURE_NON_DAD=1` is explicitly set. Stopped DAD windows are no-op even if stale tmux metadata remains. The default event schema is privacy-conservative: full prompts, full tool outputs, and full shell command previews are not stored. It records event name, session ID, cwd, tmux pane/window metadata, tool name, status, command kind/path summaries, hashes, failure summaries, evidence-runner references, lifecycle events, and a stable event fingerprint. Evidence references are parsed from `EVIDENCE_JSON:`/`EVIDENCE_LOG:` markers and generic `/evidence/` paths so plugin-data evidence roots work. Shell-side event emitters must use structured JSON encoding, not ad hoc quote escaping. Full raw event storage is only allowed when `DAD_EVENT_STORE_RAW=1` is deliberately set outside DAD, and raw storage is still redacted.
 
 Dad reads this trace with:
 
@@ -785,6 +785,7 @@ Do this sequence exactly:
    - Use native `tmux` commands via `run_terminal_cmd` (display-message, list-sessions, list-windows, list-panes, etc.).
    - Resolve the exact socket from `$TMUX` or `tmux display-message`, then use `tmux -S <socket>` for all later operations.
    - Record the current session ID, window ID, window name, and Dad pane ID before changing anything.
+   - Run `<DAD_ROOT>/bin/dad-hooks.sh install --socket <socket>` before launching the Son. This installs the runtime event hook for new DAD/Son Grok sessions without making the plugin ship always-on hooks. If the helper fails, report the hook activation blocker and continue only with the explicit caveat that event traces may be absent.
 
 2. Rename the current window to a short `DAD-<Slug>` name based on the objective (examples: `DAD-Snake`, `DAD-Roguelike`, `DAD-Debugger`).
 
@@ -805,6 +806,7 @@ Do this sequence exactly:
    - `@dad_son_pane`: the Son pane ID
    - `@dad_tmux_socket`: exact tmux socket path when known
    - `@dad_window_id`: the current tmux window ID
+   - `@dad_hook_file`: runtime hook path printed by `<DAD_ROOT>/bin/dad-hooks.sh install`, normally `${GROK_HOME:-~/.grok}/hooks/dad-events.json`
    - `@dad_started_at`: current timestamp
    - `@dad_workspace_root`: current git root if one is detected, otherwise empty
    - `@dad_session_branch`: current branch if one is detected, otherwise empty
